@@ -5,7 +5,9 @@ A command line interface for quickly recording ideas or notes while working in t
 ##### Installation
 You can install terminal idea by running the install script
 
-`/bin/sh install.sh`
+```commandline
+$/bin/sh install.sh
+```
 
 ##### Configuration
 Once you have `ti` installed you will want to set up the configuration which can be done with the following command.
