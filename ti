@@ -180,8 +180,13 @@ def handle_out(namespace):
         log_error("Your configuration file is improperly formatted or has not been specified", e)
         return
 
+    if len(namespace.type) == 0:
+        types = user_config.keys()
+    else:
+        types = namespace.type
+
     # Iterate through provided types
-    for message_type in namespace.type:
+    for message_type in types:
         if not namespace.simple:
             __logger.info(f"### Messages for {message_type} ###")
 
@@ -328,7 +333,7 @@ if __name__ == '__main__':
     arg_parser_message.add_argument('message', type=str, help='The message to log')
 
     arg_parser_print = subparsers.add_parser(Commands.OUT, help='Output all messages of type', parents=[base_subparser])
-    arg_parser_print.add_argument('type', type=str, nargs='+', help='The type of message to output')
+    arg_parser_print.add_argument('type', type=str, nargs='*', help='The type of message to output')
     arg_parser_print.add_argument('-s', action='store_true', dest='simple', help='Only output messages')
 
     arg_parser_mark = subparsers.add_parser(Commands.MARK, help='Mark message(s) at index(s)', parents=[base_subparser])
