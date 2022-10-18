@@ -12,7 +12,9 @@ $/bin/sh install.sh
 ##### Configuration
 Once you have `ti` installed you will want to set up the configuration which can be done with the following command.
 
-`ideat config <path-to-configuration-file>`
+```commandline
+$ ti config <path-to-configuration-file>
+```
 
 Typical `ti` usage would be something like `ti log ideas 'build a weird idea recording app'` which in turn would log the 
 message 'build a weird idea recording app' to a file specified in your configuration for `ideas`. Such a configuration
