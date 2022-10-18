@@ -64,7 +64,7 @@ positional arguments:
           range       Index to delete or two to indicate a range
 
 options:
-  -h, --help            show this help message and exit
-  -v
+  -h, --help            Show this help message and exit
+  -v                    Enable verbose logging
 
 ```
