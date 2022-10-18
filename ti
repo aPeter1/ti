@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+
+import argparse
+import logging
+import os
+import json
+
+
+class Commands:
+    LOG = "log"
+    CONFIG = "config"
+    OUT = "out"
+    MARK = 'mark'
+    UNMARK = 'unmark'
+    DELETE = 'del'
+
+
+__base_config_path = '.ticonfig.json'
+__logger = logging.getLogger("TI")
+
+
+class TiConfigKeys:
+    USER_CONFIG = "user_config"
+
+
+class UserConfigKeys:
+    DEFAULT = "default"
+
+
+def format_message(message_type, marked, message):
+    return f"{message_type}|||{1 if marked else 0}|||{message}\n"
+
+
+def parse_config(file_path: str) -> dict:
+    with open(file_path, 'r') as fp:
+        return json.load(fp)
+
+
+def write_config(file_path: str, config: dict) -> None:
+    with open(file_path, 'w') as fp:
+        json.dump(config, fp)
+
+
+def write_file(file_path: str, contents: list[str] = None, write_mode: str = 'w') -> None:
+    with open(file_path, write_mode) as fp:
+        if contents is not None:
+            fp.writelines(contents)
+
+
+def retrieve_ti_config(file_path):
+    if not os.path.isfile(file_path):
+        write_config(file_path, {TiConfigKeys.USER_CONFIG: None})
+
+    return parse_config(file_path)
+
+
+def verify_user_config(user_config):
+    if len(user_config) == 0:
+        raise Exception("Configuration file is empty.")
+
+    if UserConfigKeys.DEFAULT not in user_config.keys():
+        raise Exception("Configuration file does not set default.")
+
+    for k, v in user_config.items():
+        if v in user_config and v != k:
+            continue
+        elif not isinstance(v, str):
+            raise Exception(f"Value for user configuration key '{k}' must be a string. Instead got '{v}'")
+        elif not os.path.isfile(v):
+            try:
+                write_file(v, ["# TI CONFIG"])
+            except Exception as e:
+                raise Exception(f"Value for user configuration key '{k}' was not a "
+                                f"valid section name or file path.") from e
+
+
+def retrieve_user_config(file_path):
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"Configuration file '{file_path}' does not exist.")
+
+    try:
+        user_config = parse_config(file_path)
+    except Exception as e:
+        raise Exception("Configuration file was improperly formatted. See inner exception") from e
+
+    return user_config
+
+
+def retrieve_user_config_from_ti_config(file_path):
+    ti_config = retrieve_ti_config(file_path)
+
+    if TiConfigKeys.USER_CONFIG not in ti_config:
+        write_config(file_path, {TiConfigKeys.USER_CONFIG: None})
+        raise Exception("User config has not been specified")
+
+    user_config_path = ti_config[TiConfigKeys.USER_CONFIG]
+    if user_config_path is None:
+        raise Exception("User config has not been specified")
+
+    return retrieve_user_config(user_config_path)
+
+
+def get_user_type_path(namespace_type_name, user_config):
+    if namespace_type_name not in user_config:
+        raise Exception(f"Type '{namespace_type_name}' not found in user configuration.")
+
+    def get_path_recursive(type_name, depth):
+        if depth > len(user_config):
+            raise Exception(f"The user configuration contains a circular dependency, can't determine log path")
+
+        type_value = user_config[type_name]
+        if type_value in user_config:
+            return get_path_recursive(type_value, depth + 1)
+        return type_value
+
+    return get_path_recursive(namespace_type_name, 0)
+
+
+
+def log_error(message, e):
+    __logger.debug("Exception", exc_info=e)
+    __logger.warning(f"{message} (see more with verbose [-v])")
+
+
+def handle_config(namespace):
+    # Verify user configuration is valid
+    try:
+        user_config = retrieve_user_config(namespace.file)
+        verify_user_config(user_config)
+    except Exception as e:
+        log_error("Your configuration file is improperly formatted", e)
+        return
+
+    # Update the TI configuration file
+    try:
+        ti_config = retrieve_ti_config(__base_config_path)
+        ti_config[TiConfigKeys.USER_CONFIG] = os.path.abspath(namespace.file)
+        write_config(__base_config_path, ti_config)
+    except Exception as e:
+        log_error("An error occurred updating the TI configuration", e)
+        return
+
+    __logger.info('Saved user configuration file. You are ready to use TI!')
+
+
+def handle_log(namespace):
+    # Verify user configuration is valid
+    try:
+        user_config = retrieve_user_config_from_ti_config(__base_config_path)
+        verify_user_config(user_config)
+    except Exception as e:
+        log_error("Your configuration file is improperly formatted or has not been specified", e)
+        return
+
+    # Get the log path for the type
+    try:
+        log_path = get_user_type_path(namespace.type, user_config)
+    except Exception as e:
+        log_error(f"Could not determine log path for {namespace.type}. Check your config", e)
+        return
+
+    # Write the message to the log file
+    try:
+        if not os.path.isfile(log_path):
+            write_file(log_path, ["# TI LOG\n"])
+
+        message = format_message(namespace.type, 0, namespace.message)
+        write_file(log_path, [message], 'a')
+    except Exception as e:
+        log_error("An error occurred while writing to log file. Check your config", e)
+        return
+
+
+def handle_out(namespace):
+    # Verify user configuration is valid
+    try:
+        user_config = retrieve_user_config_from_ti_config(__base_config_path)
+        verify_user_config(user_config)
+    except Exception as e:
+        log_error("Your configuration file is improperly formatted or has not been specified", e)
+        return
+
+    # Iterate through provided types
+    for message_type in namespace.type:
+        if not namespace.simple:
+            __logger.info(f"### Messages for {message_type} ###")
+
+        try:
+            log_path = get_user_type_path(message_type, user_config)
+        except Exception as e:
+            log_error(f"Could not determine log path for {message_type}. Check your config", e)
+            return
+
+        if not os.path.isfile(log_path):
+            __logger.info(f"No messages made yet for {message_type}")
+            continue
+
+        with open(log_path, 'r') as fp:
+            n = 0
+            for i, line in enumerate(fp.readlines()):
+                if i == 0 and line[0] == '#':
+                    continue
+
+                try:
+                    line_message_type, marked, message = line.split('|||')
+                except Exception as e:
+                    log_error(f"Log in file {log_path} was improperly formatted", e)
+                    continue
+
+                if line_message_type == message_type:
+                    n += 1
+                    message = message.strip('\n')
+                    if namespace.simple:
+                        __logger.info(message)
+                    else:
+                        __logger.info(f"[{n}][{' ' if marked == '0' else 'X'}] {message}")
+
+
+def handle_mark(namespace, mark):
+    # Verify user configuration is valid
+    try:
+        user_config = retrieve_user_config_from_ti_config(__base_config_path)
+        verify_user_config(user_config)
+    except Exception as e:
+        log_error("Your configuration file is improperly formatted or has not been specified", e)
+        return
+
+    try:
+        log_path = get_user_type_path(namespace.type, user_config)
+    except Exception as e:
+        log_error(f"Could not determine log path for {namespace.type}. Check your config", e)
+        return
+
+    if len(namespace.range) > 2:
+        __logger.warning("Expect one or two arguments to specify range of messages to mark")
+        return
+
+    lower = min(namespace.range)
+    upper = max(namespace.range)
+    single = lower == upper
+
+    with open(log_path, 'r') as fp:
+        n = 0
+        lines = fp.readlines()
+        for i, line in enumerate(lines):
+            if i == 0 and line[0] == '#':
+                continue
+
+            try:
+                message_type, marked, message = line.split('|||')
+            except Exception as e:
+                log_error(f"Log in file {log_path} was improperly formatted", e)
+                continue
+
+            if message_type != namespace.type:
+                continue
+
+            n += 1
+            if (single and n == lower) or lower <= n <= upper:
+                message = message.strip('\n')
+                lines[i] = f"{message_type}|||{1 if mark else 0}|||{message}\n"
+
+    write_file(log_path, lines)
+
+
+def handle_del(namespace):
+    # Verify user configuration is valid
+    try:
+        user_config = retrieve_user_config_from_ti_config(__base_config_path)
+        verify_user_config(user_config)
+    except Exception as e:
+        log_error("Your configuration file is improperly formatted or has not been specified", e)
+        return
+
+    try:
+        log_path = get_user_type_path(namespace.type, user_config)
+    except Exception as e:
+        log_error(f"Could not determine log path for {namespace.type}. Check your config", e)
+        return
+
+    if len(namespace.range) > 2:
+        __logger.warning("Expect one or two arguments to specify range of messages to mark")
+        return
+
+    lower = min(namespace.range)
+    upper = max(namespace.range)
+    single = lower == upper
+
+    with open(log_path, 'r') as fp:
+        n = 0
+        lines = fp.readlines()
+        removed = 0
+        for i, line in enumerate(lines.copy()):
+            if i == 0 and line[0] == '#':
+                continue
+
+            try:
+                message_type, marked, message = line.split('|||')
+            except Exception as e:
+                log_error(f"Log in file {log_path} was improperly formatted", e)
+                continue
+
+            if message_type != namespace.type:
+                continue
+
+            n += 1
+            if (single and n == lower) or lower <= n <= upper:
+                del lines[i - removed]
+                removed += 1
+
+    write_file(log_path, lines)
+
+
+if __name__ == '__main__':
+    arg_parser = argparse.ArgumentParser(prog='ti')
+    arg_parser.add_argument("-v", action="store_true", dest="verbose")
+
+    base_subparser = argparse.ArgumentParser(add_help=False)
+    base_subparser.add_argument("-v", action="store_true", dest="verbose", help="Enable verbose logging")
+
+    subparsers = arg_parser.add_subparsers(dest='command')
+
+    arg_parser_config = subparsers.add_parser(Commands.CONFIG, help='Set the config file', parents=[base_subparser])
+    arg_parser_config.add_argument('file', type=str, help='Path of the configuration file')
+
+    arg_parser_message = subparsers.add_parser(Commands.LOG, help='Log a message', parents=[base_subparser])
+    arg_parser_message.add_argument('type', type=str, help='The type of message to log')
+    arg_parser_message.add_argument('message', type=str, help='The message to log')
+
+    arg_parser_print = subparsers.add_parser(Commands.OUT, help='Output all messages of type', parents=[base_subparser])
+    arg_parser_print.add_argument('type', type=str, nargs='+', help='The type of message to output')
+    arg_parser_print.add_argument('-s', action='store_true', dest='simple', help='Only output messages')
+
+    arg_parser_mark = subparsers.add_parser(Commands.MARK, help='Mark message(s) at index(s)', parents=[base_subparser])
+    arg_parser_mark.add_argument('type', type=str, help='The type of message to mark')
+    arg_parser_mark.add_argument('range', type=int, nargs='+', help='Index to mark or two to indicate a range')
+
+    arg_parser_unmark = subparsers.add_parser(Commands.UNMARK, help='Unmark message(s) at index(s)', parents=[base_subparser])
+    arg_parser_unmark.add_argument('type', type=str, help='The type of message to unmark')
+    arg_parser_unmark.add_argument('range', type=int, nargs='+', help='Index to unmark or two to indicate a range')
+
+    arg_parser_delete = subparsers.add_parser(Commands.DELETE, help='Delete message(s) at index(s)', parents=[base_subparser])
+    arg_parser_delete.add_argument('type', type=str, help='The type of message to delete')
+    arg_parser_delete.add_argument('range', type=int, nargs='+', help='Index to delete or two to indicate a range')
+
+    arg_namespace = arg_parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if arg_namespace.verbose else logging.INFO, format='%(message)s')
+
+    try:
+        if arg_namespace.command == Commands.LOG:
+            handle_log(arg_namespace)
+        elif arg_namespace.command == Commands.CONFIG:
+            handle_config(arg_namespace)
+        elif arg_namespace.command == Commands.OUT:
+            handle_out(arg_namespace)
+        elif arg_namespace.command == Commands.MARK:
+            handle_mark(arg_namespace, True)
+        elif arg_namespace.command == Commands.UNMARK:
+            handle_mark(arg_namespace, False)
+        elif arg_namespace.command == Commands.DELETE:
+            handle_del(arg_namespace)
+    except Exception as e:
+        log_error("An unknown exception occurred", e)
+
