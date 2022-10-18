@@ -68,7 +68,7 @@ def verify_user_config(user_config):
             raise Exception(f"Value for user configuration key '{k}' must be a string. Instead got '{v}'")
         elif not os.path.isfile(v):
             try:
-                write_file(v, ["# TI CONFIG"])
+                write_file(v, ["# TI CONFIG\n"])
             except Exception as e:
                 raise Exception(f"Value for user configuration key '{k}' was not a "
                                 f"valid section name or file path.") from e
@@ -114,7 +114,6 @@ def get_user_type_path(namespace_type_name, user_config):
         return type_value
 
     return get_path_recursive(namespace_type_name, 0)
-
 
 
 def log_error(message, e):
