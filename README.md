@@ -45,7 +45,9 @@ positional arguments:
     out                 Output all messages of type
         positional arguments:
             type        The type of message to output
-            
+        options:
+            -s          Only output messages
+
     mark                Mark message(s) at index(s)
         positional arguments:
           type        The type of message to mark
