@@ -10,6 +10,7 @@ __base_config_path = '.ticonfig.json'
 class TiConfigKeys:
     USER_CONFIG = "user_config"
 
+
 class UserConfigKeys:
     DEFAULT = "default"
 
@@ -17,6 +18,10 @@ class UserConfigKeys:
 class Commands:
     LOG = "log"
     CONFIG = "config"
+    OUT = "out"
+    MARK = 'mark'
+    UNMARK = 'unmark'
+    DELETE = 'del'
 
 
 def parse_config(path_to_json_file: str) -> dict:
@@ -94,7 +99,7 @@ def handle_config(namespace):
     print('Saved user configuration file. You are ready to use TI!')
 
 
-def handle_log(namespace):
+def get_user_config():
     ti_config = get_ti_config()
     if ti_config[TiConfigKeys.USER_CONFIG] is None:
         raise Exception("Configuration file has not been set yet.")
@@ -106,6 +111,10 @@ def handle_log(namespace):
     verify_user_config(user_config_file)
     user_config = parse_config(user_config_file)
 
+    return user_config
+
+
+def get_user_type_path(namespace, user_config):
     if namespace.type not in user_config:
         raise Exception(f"Type '{namespace.type}' not found in user configuration.")
 
@@ -115,7 +124,13 @@ def handle_log(namespace):
             return get_path_recursive(type_value)
         return type_value
 
-    log_path = get_path_recursive(namespace.type)
+    return get_path_recursive(namespace.type)
+
+
+def handle_log(namespace):
+    user_config = get_user_config()
+    log_path = get_user_type_path(namespace, user_config)
+
     if not os.path.isfile(log_path):
         try:
             attempt_to_create_file(log_path)
@@ -123,19 +138,138 @@ def handle_log(namespace):
             raise Exception(f"Log file path '{log_path}' was invalid.")
 
     with open(log_path, 'a') as fp:
-        fp.write(namespace.message + "\n")
+        fp.write(f"{namespace.type}|||0|||{namespace.message}\n")
+
+
+def handle_out(namespace):
+    user_config = get_user_config()
+    log_path = get_user_type_path(namespace, user_config)
+
+    if not os.path.isfile(log_path):
+        try:
+            attempt_to_create_file(log_path)
+        except Exception:
+            raise Exception(f"Log file path '{log_path}' was invalid.")
+
+    with open(log_path, 'r') as fp:
+        n = 0
+        for i, line in enumerate(fp.readlines()):
+            if i == 0 and line[0] == '#':
+                continue
+
+            message_type, marked, message = line.split('|||')
+            if message_type != namespace.type:
+                continue
+
+            n += 1
+            message = message.strip('\n')
+            print(f"[{n}][{' ' if marked == '0' else 'X'}] {message}")
+
+
+def handle_mark(namespace, mark):
+    user_config = get_user_config()
+    log_path = get_user_type_path(namespace, user_config)
+
+    if not os.path.isfile(log_path):
+        try:
+            attempt_to_create_file(log_path)
+            return
+        except Exception:
+            raise Exception(f"Log file path '{log_path}' was invalid.")
+
+    if len(namespace.range) > 2:
+        raise Exception(f"{namespace.range} values given for range, expected 1 or 2.")
+
+    lower = min(namespace.range)
+    upper = max(namespace.range)
+    single = lower == upper
+
+    with open(log_path, 'r') as fp:
+        n = 0
+        lines = fp.readlines()
+        for i, line in enumerate(lines):
+            if i == 0 and line[0] == '#':
+                continue
+
+            message_type, marked, message = line.split('|||')
+            if message_type != namespace.type:
+                continue
+
+            n += 1
+            if (single and n == lower) or lower <= n <= upper:
+                message = message.strip('\n')
+                lines[i] = f"{message_type}|||{1 if mark else 0}|||{message}\n"
+
+    with open(log_path, 'w') as fp:
+        fp.writelines(lines)
+
+    handle_out(namespace)
+
+
+def handle_delete(namespace):
+    user_config = get_user_config()
+    log_path = get_user_type_path(namespace, user_config)
+
+    if not os.path.isfile(log_path):
+        try:
+            attempt_to_create_file(log_path)
+            return
+        except Exception:
+            raise Exception(f"Log file path '{log_path}' was invalid.")
+
+    if len(namespace.range) > 2:
+        raise Exception(f"{namespace.range} values given for range, expected 1 or 2.")
+
+    lower = min(namespace.range)
+    upper = max(namespace.range)
+    single = lower == upper
+
+    with open(log_path, 'r') as fp:
+        n = 0
+        lines = fp.readlines()
+        removed = 0
+        for i, line in enumerate(lines.copy()):
+            if i == 0 and line[0] == '#':
+                continue
+
+            message_type, marked, message = line.split('|||')
+            if message_type != namespace.type:
+                continue
+
+            n += 1
+            if (single and n == lower) or lower <= n <= upper:
+                del lines[i - removed]
+                removed += 1
+
+    with open(log_path, 'w') as fp:
+        fp.writelines(lines)
 
 
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(prog='ti')
     subparsers = arg_parser.add_subparsers(dest='command')
 
-    arg_parser_config = subparsers.add_parser('config', help='Set the configuration file')
+    arg_parser_config = subparsers.add_parser(Commands.CONFIG, help='Set the configuration file')
     arg_parser_config.add_argument('file', type=str, help='Path of the configuration file')
 
-    arg_parser_message = subparsers.add_parser('log', help='Log a message')
+    arg_parser_message = subparsers.add_parser(Commands.LOG, help='Log a message')
     arg_parser_message.add_argument('type', type=str, help='The type of message to log')
     arg_parser_message.add_argument('message', type=str, help='The message to log')
+
+    arg_parser_print = subparsers.add_parser(Commands.OUT, help='Output all messages of type')
+    arg_parser_print.add_argument('type', type=str, help='The type of message to output')
+
+    arg_parser_mark = subparsers.add_parser(Commands.MARK, help='Mark message(s) at index(s)')
+    arg_parser_mark.add_argument('type', type=str, help='The type of message to mark')
+    arg_parser_mark.add_argument('range', type=int, nargs='+', help='Index to mark or two to indicate a range')
+
+    arg_parser_unmark = subparsers.add_parser(Commands.UNMARK, help='Unmark message(s) at index(s)')
+    arg_parser_unmark.add_argument('type', type=str, help='The type of message to unmark')
+    arg_parser_unmark.add_argument('range', type=int, nargs='+', help='Index to unmark or two to indicate a range')
+
+    arg_parser_delete = subparsers.add_parser(Commands.DELETE, help='Delete message(s) at index(s)')
+    arg_parser_delete.add_argument('type', type=str, help='The type of message to delete')
+    arg_parser_delete.add_argument('range', type=int, nargs='+', help='Index to delete or two to indicate a range')
 
     arg_namespace = arg_parser.parse_args()
 
@@ -143,8 +277,16 @@ if __name__ == '__main__':
         handle_log(arg_namespace)
     elif arg_namespace.command == Commands.CONFIG:
         handle_config(arg_namespace)
+    elif arg_namespace.command == Commands.OUT:
+        handle_out(arg_namespace)
+    elif arg_namespace.command == Commands.MARK:
+        handle_mark(arg_namespace, True)
+    elif arg_namespace.command == Commands.UNMARK:
+        handle_mark(arg_namespace, False)
+    elif arg_namespace.command == Commands.DELETE:
+        handle_delete(arg_namespace)
     else:
-        raise ValueError(f"Invalid command '{arg_namespace.command}'. This branch is unreachable so congratulations!")
+        raise ValueError(f"Invalid command '{arg_namespace.command}'")
 
 
 
